@@ -2,26 +2,30 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/disharjayanth/recepis-api-gin/models"
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type RecipeHandler struct {
-	collection *mongo.Collection
-	ctx        context.Context
+	collection  *mongo.Collection
+	ctx         context.Context
+	redisClient *redis.Client
 }
 
-func NewRecipesHandler(ctx context.Context, collection *mongo.Collection) *RecipeHandler {
+func NewRecipesHandler(ctx context.Context, collection *mongo.Collection, redisClient *redis.Client) *RecipeHandler {
 	return &RecipeHandler{
-		collection: collection,
-		ctx:        ctx,
+		collection:  collection,
+		ctx:         ctx,
+		redisClient: redisClient,
 	}
 }
 
@@ -34,24 +38,44 @@ func NewRecipesHandler(ctx context.Context, collection *mongo.Collection) *Recip
 // 	'200':
 // 		description: Successful operation
 func (handler *RecipeHandler) ListRecipesHandler(c *gin.Context) {
-	// Find method returns cursor to interate over collection of objects
-	cur, err := handler.collection.Find(handler.ctx, bson.M{})
-	if err != nil {
+	val, err := handler.redisClient.Get(handler.ctx, "recipes").Result()
+	if err == redis.Nil {
+		fmt.Println("Request forwarded to mongoDB since key isnt present in redis")
+		// Find method returns cursor to interate over collection of objects
+		cur, err := handler.collection.Find(handler.ctx, bson.M{})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": err,
+			})
+			return
+		}
+		defer cur.Close(handler.ctx)
+
+		recipes := make([]models.Recipe, 0)
+		for cur.Next(handler.ctx) {
+			var recipe models.Recipe
+			cur.Decode(&recipe)
+			recipes = append(recipes, recipe)
+		}
+
+		sliceOfJSON, err := json.Marshal(recipes)
+		if err != nil {
+			fmt.Println("Error while marshalling list of recipes to array of JSON in ListRecipeHandler:", err)
+			return
+		}
+
+		handler.redisClient.Set(handler.ctx, "recipes", string(sliceOfJSON), 0)
+		c.JSON(http.StatusOK, recipes)
+	} else if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err,
+			"error": err.Error(),
 		})
-		return
+	} else {
+		fmt.Println("Response coming from Redis")
+		recipes := make([]models.Recipe, 0)
+		json.Unmarshal([]byte(val), &recipes)
+		c.JSON(http.StatusOK, recipes)
 	}
-	defer cur.Close(handler.ctx)
-
-	recipes := make([]models.Recipe, 0)
-	for cur.Next(handler.ctx) {
-		var recipe models.Recipe
-		cur.Decode(&recipe)
-		recipes = append(recipes, recipe)
-	}
-
-	c.JSON(http.StatusOK, recipes)
 }
 
 func (handler *RecipeHandler) NewRecipeHandler(c *gin.Context) {
@@ -74,6 +98,9 @@ func (handler *RecipeHandler) NewRecipeHandler(c *gin.Context) {
 		return
 	}
 
+	fmt.Println("Delete `recipes` key from redis since new recipe is added to list and it's outdated")
+	handler.redisClient.Del(handler.ctx, "recipes")
+
 	c.JSON(http.StatusOK, recipe)
 }
 
@@ -95,7 +122,7 @@ func (handler *RecipeHandler) NewRecipeHandler(c *gin.Context) {
 //         description: Invalid input
 //     '404':
 //         description: Invalid recipe ID
-func (handlers *RecipeHandler) UpdateRecipeHandler(c *gin.Context) {
+func (handler *RecipeHandler) UpdateRecipeHandler(c *gin.Context) {
 	id := c.Param("id")
 	var recipe models.Recipe
 	if err := c.ShouldBindJSON(&recipe); err != nil {
@@ -111,7 +138,7 @@ func (handlers *RecipeHandler) UpdateRecipeHandler(c *gin.Context) {
 		return
 	}
 
-	_, err = handlers.collection.UpdateOne(handlers.ctx, bson.M{"_id": objectID}, bson.D{{"$set", bson.D{
+	_, err = handler.collection.UpdateOne(handler.ctx, bson.M{"_id": objectID}, bson.D{{"$set", bson.D{
 		{"name", recipe.Name},
 		{"instructions", recipe.Instructions},
 		{"ingredients", recipe.Ingredients},
@@ -125,6 +152,9 @@ func (handlers *RecipeHandler) UpdateRecipeHandler(c *gin.Context) {
 		})
 		return
 	}
+
+	fmt.Println("Delete `recipes` key from redis since a recipe has been updated to list and it's outdated")
+	handler.redisClient.Del(handler.ctx, "recipes")
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Recipe has been updated",
@@ -155,6 +185,9 @@ func (handler *RecipeHandler) DeleteRecipeHandler(c *gin.Context) {
 		})
 		return
 	}
+
+	fmt.Println("Delete `recipes` key from redis since a recipe has been deleted from list and it's outdated")
+	handler.redisClient.Del(handler.ctx, "recipes")
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "recipe deleted with id " + id,
