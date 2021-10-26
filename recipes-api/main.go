@@ -22,24 +22,14 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"github.com/disharjayanth/recepis-api-gin/handlers"
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"github.com/go-redis/redis/v8"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
-
-type Recipe struct {
-	ID           primitive.ObjectID `json:"id" bson:"_id"`
-	Name         string             `json:"name" bson:"name"`
-	Tags         []string           `json:"tags" bson:"tags`
-	Ingredients  []string           `json:"ingredients" bson:"ingredients`
-	Instructions []string           `json:"instructions" bson:"instructions"`
-	PublishedAt  time.Time          `json:"publishedAt" bson:"publishedAt`
-}
 
 var err error
 
@@ -64,7 +54,17 @@ func init() {
 	fmt.Println("Connected to mongodb..")
 
 	collection = client.Database(os.Getenv("MONGO_DATABASE")).Collection("recipes")
-	recipesHandler = handlers.NewRecipesHandler(ctx, collection)
+
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "",
+		DB:       0,
+	})
+
+	status := redisClient.Ping(ctx)
+	fmt.Println(status)
+
+	recipesHandler = handlers.NewRecipesHandler(ctx, collection, redisClient)
 }
 
 func main() {
