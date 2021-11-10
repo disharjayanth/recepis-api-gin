@@ -22,10 +22,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/disharjayanth/recepis-api-gin/handlers"
 	"github.com/gin-contrib/sessions"
 	redisStore "github.com/gin-contrib/sessions/redis"
+	"github.com/gin-gonic/contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -63,7 +65,7 @@ func init() {
 		Password: "",
 		DB:       0,
 	})
-
+	fmt.Println(redisClient)
 	status := redisClient.Ping(ctx)
 	fmt.Println(status)
 
@@ -82,6 +84,15 @@ func main() {
 		return
 	}
 
+	router.Use(cors.New(cors.Config{
+		AllowedOrigins:   []string{"https://localhost:3000"},
+		AllowedMethods:   []string{"GET", "OPTIONS"},
+		AllowedHeaders:   []string{"Origin"},
+		ExposedHeaders:   []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}))
+	router.Use(cors.Default())
 	router.Use(sessions.Sessions("recipe_api", store))
 
 	router.GET("/recipes", recipesHandler.ListRecipesHandler)
@@ -99,5 +110,6 @@ func main() {
 		authorized.GET("/recipes/search", recipesHandler.SearchRecipesHandler)
 	}
 
-	router.Run(":3000")
+	router.RunTLS(":443", "certs/localhost.crt", "certs/localhost.key")
+	// router.Run(":8000")
 }
