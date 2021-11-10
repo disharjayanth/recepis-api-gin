@@ -4,13 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
-	"time"
 
 	"github.com/disharjayanth/recepis-api-gin/models"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt"
 	"github.com/rs/xid"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -20,16 +17,6 @@ import (
 type AuthHandler struct {
 	collection *mongo.Collection
 	ctx        context.Context
-}
-
-type Claims struct {
-	Username string `json:"username"`
-	jwt.StandardClaims
-}
-
-type JWTOutput struct {
-	Token   string    `json:"token"`
-	Expires time.Time `json:"expires"`
 }
 
 func NewAuthHandler(ctx context.Context, collection *mongo.Collection) *AuthHandler {
@@ -65,29 +52,18 @@ func (handler *AuthHandler) SignUpHandler(c *gin.Context) {
 		return
 	}
 
-	expirationTime := time.Now().Add(10 * time.Minute)
-	claims := &Claims{
-		Username: user.Username,
-		StandardClaims: jwt.StandardClaims{
-			ExpiresAt: expirationTime.Unix(),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte(os.Getenv("JWT_SECRET")))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
+	sessionToken := xid.New().String()
+	session := sessions.Default(c)
+	session.Set("username", user.Username)
+	session.Set("token", sessionToken)
+	if err := session.Save(); err != nil {
+		fmt.Println("Error saving cookie session in request:", err)
 		return
 	}
 
-	jwtToken := JWTOutput{
-		Token:   tokenString,
-		Expires: expirationTime,
-	}
-
-	c.JSON(http.StatusOK, jwtToken)
+	c.JSON(http.StatusOK, gin.H{
+		"message": "User signed up",
+	})
 }
 
 // SignIn handler
